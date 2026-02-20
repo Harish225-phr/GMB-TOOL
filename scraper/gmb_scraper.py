@@ -1,7 +1,7 @@
 import requests
 import time
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from dotenv import load_dotenv
 
@@ -15,8 +15,8 @@ API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     print("⚠️ WARNING: Google API key not found. Check environment variables.")
 
-MAX_WORKERS = 5
-REQUEST_TIMEOUT = 8
+MAX_WORKERS = 2  # Reduced from 5 to prevent excessive concurrent requests
+REQUEST_TIMEOUT = 10  # Increased timeout slightly
 
 
 @lru_cache(maxsize=500)
@@ -92,12 +92,23 @@ def scrape_gmb(keyword, location, limit=60, page_token=None):
         
         page_count += 1
 
-    # 🔥 Fetch websites in parallel
+    # 🔥 Fetch websites in parallel with better error handling
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        websites = list(executor.map(get_website, place_ids))
+        futures = {executor.submit(get_website, pid): i for i, pid in enumerate(place_ids)}
+        websites = [None] * len(place_ids)  # Pre-fill with None values
+        
+        # Use as_completed with timeout to handle slow requests
+        for future in as_completed(futures, timeout=60):
+            try:
+                idx = futures[future]
+                websites[idx] = future.result()
+            except Exception as e:
+                idx = futures[future]
+                websites[idx] = "N/A"  # Default to N/A on error
+                print(f"Error fetching website for index {idx}: {str(e)}")
 
     for i, result in enumerate(results):
-        result["website"] = websites[i] if i < len(websites) else "N/A"
+        result["website"] = websites[i] if i < len(websites) and websites[i] else "N/A"
         result.pop("place_id", None)
 
     return {

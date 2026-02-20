@@ -12,6 +12,16 @@ app = Flask(__name__)
 cache = Cache(app, config={'CACHE_TYPE': 'simple', 'CACHE_DEFAULT_TIMEOUT': 3600})
 
 
+# Global error handler to ensure all responses are valid JSON
+@app.errorhandler(Exception)
+def handle_error(error):
+    """Catch all unhandled exceptions and return proper JSON error"""
+    print(f"Unhandled error: {str(error)}")
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": "Server error. Please try again later."}), 500
+
+
 def get_cache_key(keyword, location):
     """Generate cache key from keyword and location"""
     key_string = f"{keyword.lower()}_{location.lower()}"
@@ -73,28 +83,39 @@ def search_multiple():
 
         all_results = {}
 
-        # Parallel search for all locations
+        # Parallel search for all locations - REDUCED workers to avoid timeouts
         def search_location(location):
             try:
                 response = scrape_gmb(keyword, location)
-                return (location, response["results"])
+                return (location, response.get("results", []))
             except Exception as e:
+                print(f"Error searching {location}: {str(e)}")
                 return (location, [])
 
-        # Use ThreadPoolExecutor for parallel searches
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        # Use ThreadPoolExecutor for parallel searches - MAX 3 concurrent to avoid overwhelming server
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(search_location, loc) for loc in location_list]
-            for future in futures:
-                location, results = future.result()
-                all_results[location] = results
+            
+            # Collect results with timeout to prevent hanging
+            from concurrent.futures import as_completed
+            for future in as_completed(futures, timeout=60):  # 60 second timeout per location
+                try:
+                    location, results = future.result()
+                    all_results[location] = results
+                except Exception as e:
+                    print(f"Future result error: {str(e)}")
+                    # Still return partial results even if some locations fail
+                    continue
 
         return jsonify({
             "results": all_results,
             "total_locations": len(location_list),
+            "locations_found": len(all_results),
             "keyword": keyword
         })
 
     except Exception as e:
+        print(f"Search-multiple error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
