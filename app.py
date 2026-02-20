@@ -86,10 +86,15 @@ def search():
         
         # Fetch fresh data with timeout protection
         try:
+            log_error(f"Starting search: {keyword} in {location}")
             response = scrape_gmb(keyword, location, page_token=page_token)
         except Exception as e:
-            log_error(f"Scraper exception: {str(e)}")
-            return jsonify({"error": "Search timeout. Please try again."}), 504
+            error_msg = str(e)
+            log_error(f"Scraper exception: {error_msg}")
+            # Check if it's API key issue
+            if "API key" in error_msg or "not configured" in error_msg:
+                return jsonify({"error": "API Key not configured. Check Render environment variables."}), 500
+            return jsonify({"error": f"Search failed: {error_msg}"}), 500
         
         if response is None:
             return jsonify({"error": "No response from scraper"}), 500
