@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GMB Pro Tool - Local Business Finder</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px 0;
+        }
+
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+            animation: slideDown 0.6s ease-out;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1rem;
+            opacity: 0.9;
+        }
+
+        .search-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            animation: slideUp 0.6s ease-out;
+        }
+
+        .search-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .form-control {
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px 15px;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+            outline: none;
+        }
+
+        .btn-search {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 30px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-search:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+            color: white;
+        }
+
+        .btn-search:active {
+            transform: translateY(0);
+        }
+
+        .btn-search:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        /* Loader Styles */
+        .loader-container {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            animation: slideUp 0.4s ease-out;
+        }
+
+        .loader-container.active {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loader-text {
+            margin-top: 15px;
+            color: #667eea;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        /* Results Styles */
+        .results-container {
+            animation: slideUp 0.6s ease-out;
+        }
+
+        .result-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+            border-left: 4px solid #667eea;
+        }
+
+        .result-card:hover {
+            transform: translateX(5px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 12px;
+        }
+
+        .business-name {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #2d3748;
+            max-width: 70%;
+        }
+
+        .rating-badge {
+            background: #ffd700;
+            color: #333;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .rating-badge i {
+            color: #ff9800;
+        }
+
+        .result-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 15px 0;
+        }
+
+        .detail-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #555;
+            font-size: 0.95rem;
+        }
+
+        .detail-icon {
+            color: #667eea;
+            width: 20px;
+        }
+
+        .website-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            word-break: break-all;
+        }
+
+        .website-link:hover {
+            text-decoration: underline;
+            color: #764ba2;
+        }
+
+        .no-website {
+            color: #999;
+            font-style: italic;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            color: #ccc;
+            margin-bottom: 15px;
+        }
+
+        .empty-state p {
+            color: #999;
+            font-size: 1.1rem;
+        }
+
+        .error-alert {
+            background: #fee;
+            border: 2px solid #fcc;
+            color: #c33;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+            animation: slideDown 0.4s ease-out;
+        }
+
+        .error-alert.show {
+            display: block;
+        }
+
+        .cached-badge {
+            display: inline-block;
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-top: 10px;
+            font-weight: 600;
+        }
+
+        .load-more-container {
+            text-align: center;
+            padding: 30px 0;
+        }
+
+        .btn-load-more {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            padding: 12px 30px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            font-size: 0.95rem;
+        }
+
+        .btn-load-more:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-load-more:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .no-more-results {
+            color: #2e7d32;
+            font-weight: 600;
+            padding: 20px;
+            background: #e8f5e9;
+            border-radius: 8px;
+            display: inline-block;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .search-row {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .result-details {
+                grid-template-columns: 1fr;
+            }
+
+            .result-header {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="header">
+        <h1><i class="fas fa-map-location-dot"></i> GMB Pro Tool</h1>
+        <p>Find & Analyze Local Businesses Instantly</p>
+    </div>
+
+    <div class="search-card">
+        <div class="search-row">
+            <input type="text" id="keyword" class="form-control" placeholder="🔍 What to search? (Restaurant, Plumber, etc.)">
+            <input type="text" id="location" class="form-control" placeholder="📍 Location (City, Area, etc.)">
+            <button onclick="searchData()" class="btn-search" id="searchBtn">
+                <i class="fas fa-search"></i> Search
+            </button>
+        </div>
+    </div>
+
+    <div class="error-alert" id="errorAlert"></div>
+
+    <div class="loader-container" id="loaderContainer">
+        <div class="spinner"></div>
+        <div class="loader-text">🔄 Searching Local Businesses...</div>
+    </div>
+
+    <div class="results-container" id="resultsContainer"></div>
+
+    <div class="load-more-container" id="loadMoreContainer">
+        <button onclick="loadMore()" class="btn-load-more" id="loadMoreBtn">
+            <i class="fas fa-arrow-down"></i> Load More Results
+        </button>
+        <div class="no-more-results" id="noMoreResults" style="display: none;">
+            <i class="fas fa-check-circle"></i> No more results available
+        </div>
+    </div>
+</div>
+
+<script>
+    async function searchData() {
+        const keyword = document.getElementById("keyword").value.trim();
+        const location = document.getElementById("location").value.trim();
+        const errorAlert = document.getElementById("errorAlert");
+        const loaderContainer = document.getElementById("loaderContainer");
+        const resultsContainer = document.getElementById("resultsContainer");
+        const searchBtn = document.getElementById("searchBtn");
+        const loadMoreContainer = document.getElementById("loadMoreContainer");
+
+        // Clear previous results and errors
+        errorAlert.classList.remove("show");
+        resultsContainer.innerHTML = "";
+        loadMoreContainer.style.display = "none";
+
+        // Validation
+        if (!keyword || !location) {
+            errorAlert.innerHTML = "<i class='fas fa-exclamation-circle'></i> Please enter both keyword and location!";
+            errorAlert.classList.add("show");
+            return;
+        }
+
+        // Reset pagination
+        currentKeyword = keyword;
+        currentLocation = location;
+        nextPageToken = null;
+        totalResultsCount = 0;  // Reset count for new search
+
+        // Show loader
+        loaderContainer.classList.add("active");
+        searchBtn.disabled = true;
+
+        try {
+            const response = await fetch("/search", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ keyword, location, page_token: null })
+            });
+
+            const result = await response.json();
+
+            // Hide loader
+            loaderContainer.classList.remove("active");
+            searchBtn.disabled = false;
+
+            if (!response.ok) {
+                throw new Error(result.error || "Search failed. Please try again.");
+            }
+
+            const data = result.data;
+            const isCached = result.cached;
+            nextPageToken = result.next_page_token;
+
+            // Check if data is empty
+            if (!data || data.length === 0) {
+                resultsContainer.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <p>No results found. Try different keywords or location.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Display results
+            resultsContainer.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <h5><i class="fas fa-check-circle" style="color: #667eea;"></i> Found Results</h5>
+                    ${isCached ? '<div class="cached-badge"><i class="fas fa-bolt"></i> Cached Result (Instant)</div>' : ''}
+                </div>
+            `;
+
+            displayResults(data);
+
+            // Show load more button if there are more pages
+            if (nextPageToken) {
+                loadMoreContainer.style.display = "block";
+                document.getElementById("noMoreResults").style.display = "none";
+                document.getElementById("loadMoreBtn").style.display = "block";
+            } else {
+                document.getElementById("noMoreResults").style.display = "block";
+                document.getElementById("loadMoreBtn").style.display = "none";
+                loadMoreContainer.style.display = "block";
+            }
+
+        } catch (error) {
+            loaderContainer.classList.remove("active");
+            searchBtn.disabled = false;
+            errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
+            errorAlert.classList.add("show");
+            console.error("Error:", error);
+        }
+    }
+
+    // Allow search on Enter key
+    document.getElementById("keyword").addEventListener("keypress", (e) => {
+        if (e.key === "Enter") searchData();
+    });
+    document.getElementById("location").addEventListener("keypress", (e) => {
+        if (e.key === "Enter") searchData();
+    });
+
+    let currentKeyword = "";
+    let currentLocation = "";
+    let nextPageToken = null;
+    let isLoading = false;
+    let totalResultsCount = 0;  // Track total count across pages
+
+    async function loadMore() {
+        if (!nextPageToken || isLoading) return;
+
+        isLoading = true;
+        const loadMoreBtn = document.getElementById("loadMoreBtn");
+        const errorAlert = document.getElementById("errorAlert");
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.innerHTML = '<span class="spinner-small"></span> Loading...';
+
+        try {
+            const response = await fetch("/search", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    keyword: currentKeyword, 
+                    location: currentLocation, 
+                    page_token: nextPageToken 
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to load more results");
+            }
+
+            const result = await response.json();
+            const data = result.data;
+
+            nextPageToken = result.next_page_token;
+
+            // Display new results
+            displayResults(data);
+
+            // Update button state
+            if (nextPageToken) {
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.innerHTML = '<i class="fas fa-arrow-down"></i> Load More Results';
+                document.getElementById("noMoreResults").style.display = "none";
+            } else {
+                loadMoreBtn.style.display = "none";
+                document.getElementById("noMoreResults").style.display = "block";
+            }
+
+            isLoading = false;
+
+        } catch (error) {
+            errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
+            errorAlert.classList.add("show");
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.innerHTML = '<i class="fas fa-arrow-down"></i> Load More Results';
+            isLoading = false;
+        }
+    }
+
+    function displayResults(data) {
+        const resultsContainer = document.getElementById("resultsContainer");
+        let html = resultsContainer.innerHTML;
+
+        data.forEach((item) => {
+            totalResultsCount++;  // Increment total count
+            const website = item.website && item.website !== "N/A" 
+                ? `<a href="https://${item.website.replace(/^https?:\/\//, '')}" target="_blank" class="website-link"><i class="fas fa-globe"></i> ${item.website}</a>`
+                : '<span class="no-website">N/A</span>';
+
+            html += `
+                <div class="result-card">
+                    <div class="result-header">
+                        <div class="business-name">${totalResultsCount}. ${item.name}</div>
+                        ${item.rating !== "N/A" ? `<div class="rating-badge"><i class="fas fa-star"></i> ${item.rating}</div>` : ''}
+                    </div>
+                    <div class="result-details">
+                        <div class="detail-item">
+                            <div class="detail-icon"><i class="fas fa-comments"></i></div>
+                            <div>
+                                <strong>${item.reviews}</strong>
+                                <small style="color: #999;"> Reviews</small>
+                            </div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-icon"><i class="fas fa-link"></i></div>
+                            <div>${website}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        resultsContainer.innerHTML = html;
+    }
+</script>
+
+</body>
+</html>
