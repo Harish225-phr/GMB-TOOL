@@ -35,9 +35,12 @@ def handle_error(error):
 # Ensure all JSON responses have proper Content-Type
 @app.after_request
 def after_request(response):
-    """Ensure all responses have proper Content-Type"""
-    if response.is_json:
-        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    """Ensure all responses have proper Content-Type and encoding"""
+    response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    response.headers['Content-Encoding'] = 'utf-8'
+    # Ensure response is not empty
+    if response.data is None or response.data == b'':
+        response.data = json.dumps({"error": "Empty response from server"}).encode('utf-8')
     return response
 
 
@@ -45,6 +48,12 @@ def get_cache_key(keyword, location):
     """Generate cache key from keyword and location"""
     key_string = f"{keyword.lower()}_{location.lower()}"
     return hashlib.md5(key_string.encode()).hexdigest()
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint"""
+    return jsonify({"status": "ok", "message": "App is running"}), 200
 
 
 @app.route("/")
@@ -75,8 +84,12 @@ def search():
             if cached_data:
                 return jsonify({"data": cached_data["results"], "next_page_token": cached_data.get("next_page_token"), "cached": True})
         
-        # Fetch fresh data
-        response = scrape_gmb(keyword, location, page_token=page_token)
+        # Fetch fresh data with timeout protection
+        try:
+            response = scrape_gmb(keyword, location, page_token=page_token)
+        except Exception as e:
+            log_error(f"Scraper exception: {str(e)}")
+            return jsonify({"error": "Search timeout. Please try again."}), 504
         
         if response is None:
             return jsonify({"error": "No response from scraper"}), 500
@@ -135,20 +148,23 @@ def search_multiple():
                 log_error(f"Error searching {location}: {str(e)}")
                 return (location, [])
 
-        # Use ThreadPoolExecutor for parallel searches - MAX 3 concurrent to avoid overwhelming server
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        # Use ThreadPoolExecutor for parallel searches - MAX 2 concurrent to avoid overwhelming server
+        with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced from 3 to 2
             futures = [executor.submit(search_location, loc) for loc in location_list]
             
             # Collect results with timeout to prevent hanging
             from concurrent.futures import as_completed
-            for future in as_completed(futures, timeout=60):  # 60 second timeout per location
-                try:
-                    location, results = future.result()
-                    all_results[location] = results if results else []
-                except Exception as e:
-                    log_error(f"Future result error: {str(e)}")
-                    # Still return partial results even if some locations fail
-                    continue
+            try:
+                for future in as_completed(futures, timeout=120):  # Increased to 120s
+                    try:
+                        location, results = future.result()
+                        all_results[location] = results if results else []
+                    except Exception as e:
+                        log_error(f"Future result error: {str(e)}")
+                        # Still return partial results even if some locations fail
+                        continue
+            except Exception as e:
+                log_error(f"as_completed timeout: {str(e)}")
 
         response_data = {
             "results": all_results,

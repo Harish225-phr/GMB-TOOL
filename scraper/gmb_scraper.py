@@ -50,7 +50,7 @@ def scrape_gmb(keyword, location, limit=60, page_token=None):
     place_ids = []
     current_page_token = page_token
     page_count = 0
-    MAX_PAGES = 15  # 🔥 DEEP SEARCH - Keep searching till no more results!
+    MAX_PAGES = 3  # 🔥 LIMIT to 3 pages to prevent timeout in production
 
     while page_count < MAX_PAGES:
         params = {
