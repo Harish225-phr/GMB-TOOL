@@ -32,15 +32,17 @@ def handle_error(error):
     return response, 500
 
 
-# Ensure all JSON responses have proper Content-Type
+# Ensure JSON responses have proper Content-Type (but NOT HTML pages!)
 @app.after_request
 def after_request(response):
-    """Ensure all responses have proper Content-Type and encoding"""
-    response.headers['Content-Type'] = 'application/json; charset=utf-8'
-    response.headers['Content-Encoding'] = 'utf-8'
-    # Ensure response is not empty
-    if response.data is None or response.data == b'':
-        response.data = json.dumps({"error": "Empty response from server"}).encode('utf-8')
+    """Ensure JSON responses have proper Content-Type - skip HTML pages"""
+    # Only modify JSON responses, not HTML pages
+    if response.content_type and 'text/html' in response.content_type:
+        return response  # Don't modify HTML responses
+    
+    # Only set JSON headers for actual JSON responses
+    if response.is_json:
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
     return response
 
 
