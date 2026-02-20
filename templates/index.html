@@ -351,6 +351,98 @@
                 gap: 10px;
             }
         }
+
+        /* Table Styles */
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            margin-bottom: 20px;
+        }
+
+        .results-table thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .results-table th {
+            padding: 15px 20px;
+            text-align: left;
+            font-weight: 700;
+            border: none;
+        }
+
+        .results-table td {
+            padding: 12px 20px;
+            border-bottom: 1px solid #e9ecef;
+            word-break: break-all;
+        }
+
+        .results-table tbody tr:hover {
+            background: #f8f9ff;
+        }
+
+        .results-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .location-header {
+            font-weight: 700;
+            color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .copy-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            font-size: 0.9rem;
+            margin-right: 10px;
+        }
+
+        .copy-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .copy-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .website-cell {
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .website-cell a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .website-cell a:hover {
+            text-decoration: underline;
+            color: #764ba2;
+        }
+
+        .multi-search-info {
+            background: #e3f2fd;
+            border-left: 4px solid #667eea;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            color: #2c5282;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -362,10 +454,13 @@
     </div>
 
     <div class="search-card">
-        <div class="search-row">
-            <input type="text" id="keyword" class="form-control" placeholder="🔍 What to search? (Restaurant, Plumber, etc.)">
-            <input type="text" id="location" class="form-control" placeholder="📍 Location (City, Area, etc.)">
-            <button onclick="searchData()" class="btn-search" id="searchBtn">
+        <div class="search-row" style="grid-template-columns: 1fr auto;">
+            <div>
+                <input type="text" id="keyword-multi" class="form-control" placeholder="🔍 What to search? (Restaurant, Plumber, etc.)" style="margin-bottom: 10px;">
+                <small style="color: #999; margin-top: 8px; display: block;">👇 Enter locations separated by commas (add as many as you want!)</small>
+                <textarea id="locations-multi" class="form-control" placeholder="Mumbai, Delhi, Bangalore, Pune, Hyderabad, Kolkata, Chennai, Jaipur, Lucknow, Kanpur..." style="margin-top: 10px; min-height: 60px; font-size: 0.9rem; padding: 10px;"></textarea>
+            </div>
+            <button onclick="searchMultipleLocations()" class="btn-search" id="searchMultiBtn" style="height: fit-content; white-space: nowrap;">
                 <i class="fas fa-search"></i> Search
             </button>
         </div>
@@ -485,11 +580,11 @@
     }
 
     // Allow search on Enter key
-    document.getElementById("keyword").addEventListener("keypress", (e) => {
-        if (e.key === "Enter") searchData();
+    document.getElementById("keyword-multi").addEventListener("keypress", (e) => {
+        if (e.key === "Enter") searchMultipleLocations();
     });
-    document.getElementById("location").addEventListener("keypress", (e) => {
-        if (e.key === "Enter") searchData();
+    document.getElementById("locations-multi").addEventListener("keypress", (e) => {
+        if (e.ctrlKey && e.key === "Enter") searchMultipleLocations();
     });
 
     let currentKeyword = "";
@@ -497,6 +592,207 @@
     let nextPageToken = null;
     let isLoading = false;
     let totalResultsCount = 0;  // Track total count across pages
+    let multiSearchResults = {};  // Store multiple location results
+
+    async function searchMultipleLocations() {
+        const keyword = document.getElementById("keyword-multi").value.trim();
+        const locationsInput = document.getElementById("locations-multi").value.trim();
+        const errorAlert = document.getElementById("errorAlert");
+        const loaderContainer = document.getElementById("loaderContainer");
+        const resultsContainer = document.getElementById("resultsContainer");
+        const searchMultiBtn = document.getElementById("searchMultiBtn");
+        const loadMoreContainer = document.getElementById("loadMoreContainer");
+
+        // Clear previous results
+        errorAlert.classList.remove("show");
+        resultsContainer.innerHTML = "";
+        loadMoreContainer.style.display = "none";
+
+        // Validation
+        if (!keyword || !locationsInput) {
+            errorAlert.innerHTML = "<i class='fas fa-exclamation-circle'></i> Please enter keyword and locations!";
+            errorAlert.classList.add("show");
+            return;
+        }
+
+        const locations = locationsInput.split(",").map(loc => loc.trim()).filter(loc => loc);
+        
+        if (locations.length < 2) {
+            errorAlert.innerHTML = "<i class='fas fa-exclamation-circle'></i> Please enter at least 2 locations (separated by commas)!";
+            errorAlert.classList.add("show");
+            return;
+        }
+
+        // Show loader with start time
+        const startTime = Date.now();
+        loaderContainer.classList.add("active");
+        searchMultiBtn.disabled = true;
+        const loaderText = loaderContainer.querySelector(".loader-text");
+
+        // Update loader text with progress
+        const progressInterval = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            loaderText.innerHTML = `🚀 Searching ${locations.length} locations in parallel... (${elapsed}s)`;
+        }, 500);
+
+        try {
+            const response = await fetch("/search-multiple", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    keyword, 
+                    locations: locationsInput 
+                })
+            });
+
+            clearInterval(progressInterval);
+            const result = await response.json();
+
+            // Hide loader
+            loaderContainer.classList.remove("active");
+            searchMultiBtn.disabled = false;
+
+            if (!response.ok) {
+                throw new Error(result.error || "Search failed");
+            }
+
+            multiSearchResults = result.results;
+            displayMultipleLocationResults(keyword, result.results);
+
+        } catch (error) {
+            clearInterval(progressInterval);
+            loaderContainer.classList.remove("active");
+            searchMultiBtn.disabled = false;
+            errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
+            errorAlert.classList.add("show");
+        }
+    }
+
+    function displayMultipleLocationResults(keyword, allResults) {
+        const resultsContainer = document.getElementById("resultsContainer");
+        
+        // Count total websites found
+        let totalWebsites = 0;
+        for (let location in allResults) {
+            allResults[location].forEach(result => {
+                if (result.website && result.website !== "N/A") {
+                    totalWebsites++;
+                }
+            });
+        }
+
+        let html = `
+            <div class="multi-search-info">
+                <i class="fas fa-chart-bar"></i> <strong>Deep Search Results for "${keyword}"</strong> | 
+                Total Websites Found: <strong>${totalWebsites}</strong> across all locations 🎯
+            </div>
+            <div style="margin-bottom: 15px;">
+                <button onclick="copyAllWebsites()" class="copy-btn" id="copyAllBtn">
+                    <i class="fas fa-copy"></i> Copy All Links
+                </button>
+                <button onclick="downloadCSV()" class="copy-btn" style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);">
+                    <i class="fas fa-download"></i> Download CSV
+                </button>
+            </div>
+
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th style="width: 20%;">📍 Location</th>
+                        <th style="width: 80%;">🌐 Website Links</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        for (let location in allResults) {
+            const results = allResults[location];
+            const websites = results
+                .filter(r => r.website && r.website !== "N/A")
+                .map(r => r.website);
+
+            if (websites.length > 0) {
+                html += `
+                    <tr>
+                        <td class="location-header">${location} (${websites.length})</td>
+                        <td class="website-cell">
+                            ${websites.map((w, idx) => `
+                                <div style="margin-bottom: 8px;">
+                                    ${idx + 1}. <a href="https://${w.replace(/^https?:\/\//, '')}" target="_blank">${w}</a>
+                                </div>
+                            `).join('')}
+                        </td>
+                    </tr>
+                `;
+            } else {
+                html += `
+                    <tr>
+                        <td class="location-header">${location}</td>
+                        <td style="color: #999; font-style: italic;">No websites found</td>
+                    </tr>
+                `;
+            }
+        }
+
+        html += `
+                </tbody>
+            </table>
+        `;
+
+        resultsContainer.innerHTML = html;
+    }
+
+    function copyAllWebsites() {
+        let text = "Website Links\n";
+        text += "=".repeat(50) + "\n\n";
+
+        for (let location in multiSearchResults) {
+            text += `\n📍 ${location}\n`;
+            text += "-".repeat(40) + "\n";
+            
+            const websites = multiSearchResults[location]
+                .filter(r => r.website && r.website !== "N/A")
+                .map(r => r.website);
+
+            if (websites.length > 0) {
+                websites.forEach((w, idx) => {
+                    text += `${idx + 1}. ${w}\n`;
+                });
+            } else {
+                text += "No websites found\n";
+            }
+        }
+
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById("copyAllBtn");
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+            }, 2000);
+        });
+    }
+
+    function downloadCSV() {
+        let csv = "Location,Website Link\n";
+
+        for (let location in multiSearchResults) {
+            const websites = multiSearchResults[location]
+                .filter(r => r.website && r.website !== "N/A")
+                .map(r => r.website);
+
+            websites.forEach(w => {
+                csv += `"${location}","${w}"\n`;
+            });
+        }
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `websites_${new Date().getTime()}.csv`;
+        a.click();
+    }
 
     async function loadMore() {
         if (!nextPageToken || isLoading) return;

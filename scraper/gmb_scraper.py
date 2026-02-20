@@ -39,43 +39,58 @@ def get_website(place_id):
         return "N/A"
 
 
-def scrape_gmb(keyword, location, limit=20, page_token=None):
-    """Fast scraper with pagination support"""
+def scrape_gmb(keyword, location, limit=60, page_token=None):
+    """Deep aggressive scraper - fetches EVERY SINGLE result available"""
 
     if not API_KEY:
         return {"results": [], "next_page_token": None}
 
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {
-        "query": f"{keyword} in {location}",
-        "key": API_KEY
-    }
-
-    # Pagination support
-    if page_token:
-        params["pagetoken"] = page_token
-        time.sleep(1)  # Google requires delay
-
-    try:
-        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-        data = response.json()
-    except Exception:
-        return {"results": [], "next_page_token": None}
-
     results = []
     place_ids = []
+    current_page_token = page_token
+    page_count = 0
+    MAX_PAGES = 15  # 🔥 DEEP SEARCH - Keep searching till no more results!
 
-    for place in data.get("results", [])[:limit]:
-        place_id = place.get("place_id")
+    while page_count < MAX_PAGES:
+        params = {
+            "query": f"{keyword} in {location}",
+            "key": API_KEY
+        }
 
-        place_ids.append(place_id)
-        results.append({
-            "name": place.get("name"),
-            "rating": place.get("rating", "N/A"),
-            "reviews": place.get("user_ratings_total", "N/A"),
-            "website": "",
-            "place_id": place_id
-        })
+        # Pagination support
+        if current_page_token:
+            params["pagetoken"] = current_page_token
+            time.sleep(2)  # Google requires delay between pages
+
+        try:
+            response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            data = response.json()
+        except Exception:
+            break
+
+        # Process results from this page
+        page_results = data.get("results", [])
+        if not page_results:  # No more results
+            break
+
+        for place in page_results:
+            place_id = place.get("place_id")
+            place_ids.append(place_id)
+            results.append({
+                "name": place.get("name"),
+                "rating": place.get("rating", "N/A"),
+                "reviews": place.get("user_ratings_total", "N/A"),
+                "website": "",
+                "place_id": place_id
+            })
+
+        # Check if there are more pages
+        current_page_token = data.get("next_page_token")
+        if not current_page_token:  # No more pages available
+            break
+        
+        page_count += 1
 
     # 🔥 Fetch websites in parallel
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -87,5 +102,6 @@ def scrape_gmb(keyword, location, limit=20, page_token=None):
 
     return {
         "results": results,
-        "next_page_token": data.get("next_page_token")
+        "next_page_token": current_page_token if page_count < MAX_PAGES else None,
+        "total_results_found": len(results)
     }
