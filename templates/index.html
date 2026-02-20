@@ -486,6 +486,20 @@
 </div>
 
 <script>
+    // Safe JSON parsing helper
+    async function safeParseJSON(response) {
+        const text = await response.text();
+        if (!text) {
+            throw new Error("Empty response from server (502 error possible)");
+        }
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            console.error("JSON parse error. Response text:", text);
+            throw new Error(`Invalid JSON response: ${e.message}`);
+        }
+    }
+
     async function searchData() {
         const keyword = document.getElementById("keyword").value.trim();
         const location = document.getElementById("location").value.trim();
@@ -524,7 +538,7 @@
                 body: JSON.stringify({ keyword, location, page_token: null })
             });
 
-            const result = await response.json();
+            const result = await safeParseJSON(response);
 
             // Hide loader
             loaderContainer.classList.remove("active");
@@ -646,7 +660,7 @@
             });
 
             clearInterval(progressInterval);
-            const result = await response.json();
+            const result = await safeParseJSON(response);
 
             // Hide loader
             loaderContainer.classList.remove("active");
@@ -818,7 +832,7 @@
                 throw new Error("Failed to load more results");
             }
 
-            const result = await response.json();
+            const result = await safeParseJSON(response);
             const data = result.data;
 
             nextPageToken = result.next_page_token;

@@ -5,6 +5,7 @@ from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import sys
 
 app = Flask(__name__)
 
@@ -12,14 +13,32 @@ app = Flask(__name__)
 cache = Cache(app, config={'CACHE_TYPE': 'simple', 'CACHE_DEFAULT_TIMEOUT': 3600})
 
 
+def log_error(msg):
+    """Log errors to both stdout and stderr"""
+    print(f"[ERROR] {msg}", file=sys.stderr)
+    print(f"[ERROR] {msg}", file=sys.stdout)
+
+
 # Global error handler to ensure all responses are valid JSON
 @app.errorhandler(Exception)
 def handle_error(error):
     """Catch all unhandled exceptions and return proper JSON error"""
-    print(f"Unhandled error: {str(error)}")
+    error_msg = str(error)
+    log_error(f"Unhandled exception: {error_msg}")
     import traceback
     traceback.print_exc()
-    return jsonify({"error": "Server error. Please try again later."}), 500
+    response = jsonify({"error": "Server error. Please try again later.", "details": error_msg})
+    response.headers['Content-Type'] = 'application/json'
+    return response, 500
+
+
+# Ensure all JSON responses have proper Content-Type
+@app.after_request
+def after_request(response):
+    """Ensure all responses have proper Content-Type"""
+    if response.is_json:
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
 
 
 def get_cache_key(keyword, location):
@@ -36,6 +55,10 @@ def home():
 @app.route("/search", methods=["POST"])
 def search():
     try:
+        # Validate request
+        if not request.json:
+            return jsonify({"error": "Invalid JSON request"}), 400
+            
         keyword = request.json.get("keyword", "").strip()
         location = request.json.get("location", "").strip()
         page_token = request.json.get("page_token")  # For pagination
@@ -55,20 +78,38 @@ def search():
         # Fetch fresh data
         response = scrape_gmb(keyword, location, page_token=page_token)
         
+        if response is None:
+            return jsonify({"error": "No response from scraper"}), 500
+        
         # Cache only first page
         if not page_token:
             cache.set(cache_key, response, timeout=3600)
 
-        return jsonify({"data": response["results"], "next_page_token": response.get("next_page_token"), "cached": not page_token and cache.get(cache_key) is not None})
+        result_data = response.get("results", [])
+        next_token = response.get("next_page_token")
+        
+        return jsonify({
+            "data": result_data, 
+            "next_page_token": next_token, 
+            "cached": not page_token and cache.get(cache_key) is not None
+        })
     
+    except json.JSONDecodeError as e:
+        log_error(f"JSON decode error: {str(e)}")
+        return jsonify({"error": "Invalid JSON format"}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        log_error(f"Search error: {str(e)}")
+        return jsonify({"error": "Search failed. Please try again."}), 500
 
 
 @app.route("/search-multiple", methods=["POST"])
 def search_multiple():
     """Search across multiple locations for same keyword - PARALLEL"""
     try:
+        # Validate request
+        if not request.json:
+            return jsonify({"error": "Invalid JSON request"}), 400
+            
         keyword = request.json.get("keyword", "").strip()
         locations = request.json.get("locations", "").strip()
 
@@ -87,9 +128,11 @@ def search_multiple():
         def search_location(location):
             try:
                 response = scrape_gmb(keyword, location)
+                if response is None:
+                    return (location, [])
                 return (location, response.get("results", []))
             except Exception as e:
-                print(f"Error searching {location}: {str(e)}")
+                log_error(f"Error searching {location}: {str(e)}")
                 return (location, [])
 
         # Use ThreadPoolExecutor for parallel searches - MAX 3 concurrent to avoid overwhelming server
@@ -101,22 +144,30 @@ def search_multiple():
             for future in as_completed(futures, timeout=60):  # 60 second timeout per location
                 try:
                     location, results = future.result()
-                    all_results[location] = results
+                    all_results[location] = results if results else []
                 except Exception as e:
-                    print(f"Future result error: {str(e)}")
+                    log_error(f"Future result error: {str(e)}")
                     # Still return partial results even if some locations fail
                     continue
 
-        return jsonify({
+        response_data = {
             "results": all_results,
             "total_locations": len(location_list),
             "locations_found": len(all_results),
             "keyword": keyword
-        })
+        }
+        
+        log_error(f"Multi-search response: {json.dumps(response_data, default=str)[:200]}")  # Log first 200 chars
+        return jsonify(response_data)
 
+    except json.JSONDecodeError as e:
+        log_error(f"JSON decode error in search-multiple: {str(e)}")
+        return jsonify({"error": "Invalid JSON format"}), 400
     except Exception as e:
-        print(f"Search-multiple error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        log_error(f"Search-multiple error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": "Search failed. Please try again."}), 500
 
 
 if __name__ == "__main__":
