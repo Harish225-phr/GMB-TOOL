@@ -688,7 +688,8 @@
         // Count total websites found
         let totalWebsites = 0;
         for (let location in allResults) {
-            allResults[location].forEach(result => {
+            const results = allResults[location].results || allResults[location] || [];
+            results.forEach(result => {
                 if (result.website && result.website !== "N/A") {
                     totalWebsites++;
                 }
@@ -720,7 +721,7 @@
         `;
 
         for (let location in allResults) {
-            const results = allResults[location];
+            const results = allResults[location].results || allResults[location] || [];
             const websites = results
                 .filter(r => r.website && r.website !== "N/A")
                 .map(r => r.website);
@@ -764,7 +765,8 @@
             text += `\n📍 ${location}\n`;
             text += "-".repeat(40) + "\n";
             
-            const websites = multiSearchResults[location]
+            const results = multiSearchResults[location].results || multiSearchResults[location] || [];
+            const websites = results
                 .filter(r => r.website && r.website !== "N/A")
                 .map(r => r.website);
 
@@ -791,7 +793,8 @@
         let csv = "Location,Website Link\n";
 
         for (let location in multiSearchResults) {
-            const websites = multiSearchResults[location]
+            const results = multiSearchResults[location].results || multiSearchResults[location] || [];
+            const websites = results
                 .filter(r => r.website && r.website !== "N/A")
                 .map(r => r.website);
 
