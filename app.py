@@ -4,12 +4,14 @@ Production-grade API for lead generation with geo-grid expansion, caching, and d
 """
 
 from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
 from scraper.lead_scraper import LeadScraperEngine
 from scraper.config import config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import json
 import sys
+import os
 
 # Setup logging
 logging.basicConfig(
@@ -20,12 +22,53 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Initialize lead scraper engine (global instance)
-scraper_engine = LeadScraperEngine(
-    enable_caching=config.CACHE_ENABLED,
-    enable_geo_expansion=True,
-    fetch_websites_by_default=config.FETCH_WEBSITES_BY_DEFAULT,
-)
+# Enable CORS for all routes
+CORS(app, resources={
+    r"/search": {"origins": "*"},
+    r"/search-multiple": {"origins": "*"},
+    r"/health": {"origins": "*"},
+    r"/metrics": {"origins": "*"},
+    r"/config": {"origins": "*"},
+    r"/cache/clear": {"origins": "*"}
+})
+
+# Initialize lead scraper engine (global instance) with error handling
+scraper_engine = None
+
+def initialize_scraper():
+    """Initialize scraper engine safely."""
+    global scraper_engine
+    
+    # Check if API key is configured
+    if not config.GOOGLE_API_KEY:
+        logger.warning("⚠️ WARNING: Google API key not configured. Check environment variables.")
+        api_key_status = "NOT_CONFIGURED"
+    else:
+        api_key_status = "CONFIGURED"
+        logger.info(f"✅ API Key configured (first 10 chars: {config.GOOGLE_API_KEY[:10]}...)")
+    
+    try:
+        scraper_engine = LeadScraperEngine(
+            api_key=config.GOOGLE_API_KEY if config.GOOGLE_API_KEY else None,
+            enable_caching=config.CACHE_ENABLED,
+            enable_geo_expansion=True,
+            fetch_websites_by_default=config.FETCH_WEBSITES_BY_DEFAULT,
+        )
+        logger.info("✅ Lead Scraper Engine initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize scraper engine: {str(e)}")
+        return False
+
+# Try to initialize on startup
+try:
+    if initialize_scraper():
+        logger.info("🚀 Application started successfully")
+    else:
+        logger.warning("⚠️ Application started but scraper engine has issues")
+except Exception as e:
+    logger.error(f"Critical error during initialization: {str(e)}")
+    scraper_engine = None
 
 
 def log_error(msg):
@@ -66,16 +109,22 @@ def after_request(response):
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
+    api_key_configured = bool(config.GOOGLE_API_KEY)
+    scraper_ready = scraper_engine is not None
+    
     return jsonify({
         "status": "ok",
         "message": "App is running",
         "version": "2.0",
+        "api_key_configured": api_key_configured,
+        "scraper_ready": scraper_ready,
         "features": {
             "geo_expansion": True,
             "caching": config.CACHE_ENABLED,
             "website_fetching": config.FETCH_WEBSITES_BY_DEFAULT,
             "parallel_requests": True,
-        }
+        },
+        "warning": "Google API key not configured" if not api_key_configured else None
     }), 200
 
 
@@ -100,6 +149,20 @@ def search():
     }
     """
     try:
+        # Check if scraper is initialized
+        if scraper_engine is None:
+            return jsonify({
+                "error": "Search service not available",
+                "details": "Google API Key not configured. Set GOOGLE_MAPS_API_KEY environment variable."
+            }), 503
+        
+        # Check if API key is configured
+        if not config.GOOGLE_API_KEY:
+            return jsonify({
+                "error": "API Key not configured",
+                "details": "Set GOOGLE_MAPS_API_KEY environment variable to use search functionality"
+            }), 503
+        
         # Validate request
         if not request.json:
             return jsonify({"error": "Invalid JSON request"}), 400
@@ -164,6 +227,20 @@ def search_multiple():
     }
     """
     try:
+        # Check if scraper is initialized
+        if scraper_engine is None:
+            return jsonify({
+                "error": "Search service not available",
+                "details": "Google API Key not configured. Set GOOGLE_MAPS_API_KEY environment variable."
+            }), 503
+        
+        # Check if API key is configured
+        if not config.GOOGLE_API_KEY:
+            return jsonify({
+                "error": "API Key not configured",
+                "details": "Set GOOGLE_MAPS_API_KEY environment variable to use search functionality"
+            }), 503
+        
         if not request.json:
             return jsonify({"error": "Invalid JSON request"}), 400
         
@@ -246,6 +323,13 @@ def search_multiple():
 @app.route("/metrics", methods=["GET"])
 def metrics():
     """Get system metrics and performance stats."""
+    # Check if scraper is initialized
+    if scraper_engine is None:
+        return jsonify({
+            "error": "Metrics unavailable",
+            "details": "Scraper engine not initialized. Check GOOGLE_MAPS_API_KEY."
+        }), 503
+    
     return jsonify(scraper_engine.get_metrics()), 200
 
 
@@ -253,6 +337,13 @@ def metrics():
 def clear_cache():
     """Clear all caches (admin endpoint)."""
     try:
+        # Check if scraper is initialized
+        if scraper_engine is None:
+            return jsonify({
+                "error": "Cache clear failed",
+                "details": "Scraper engine not initialized. Check GOOGLE_MAPS_API_KEY."
+            }), 503
+        
         scraper_engine.clear_caches()
         return jsonify({"message": "Caches cleared successfully"}), 200
     except Exception as e:
