@@ -607,6 +607,57 @@
     let isLoading = false;
     let totalResultsCount = 0;  // Track total count across pages
     let multiSearchResults = {};  // Store multiple location results
+    let batchSessionId = null;  // Track batch session
+    
+    // Batch processing for free-tier stability
+    async function searchBatch(keyword, locations, batchIndex = 0, batchSize = 2) {
+        const loaderContainer = document.getElementById("loaderContainer");
+        const loaderText = loaderContainer.querySelector(".loader-text");
+        
+        try {
+            if (!batchSessionId) {
+                batchSessionId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            }
+            
+            const response = await fetch("/search-batch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    session_id: batchSessionId,
+                    keyword: keyword,
+                    locations: locations,
+                    batch_size: batchSize,
+                    batch_index: batchIndex,
+                    use_expansion: false,
+                    fetch_websites: true,
+                })
+            });
+            
+            const result = await safeParseJSON(response);
+            
+            if (!response.ok) {
+                throw new Error(result.error || "Batch search failed");
+            }
+            
+            if (result.batch_results) {
+                Object.assign(multiSearchResults, result.batch_results);
+            }
+            
+            const progress = result.progress;
+            loaderText.innerHTML = `🚀 Searching: ${progress.locations_completed}/${progress.total_locations} locations (Batch ${progress.current_batch}/${progress.total_batches}) - ${progress.percent_complete}% complete`;
+            
+            displayMultipleLocationResults(keyword, multiSearchResults);
+            
+            if (progress.has_next_batch) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                return await searchBatch(keyword, locations, progress.current_batch, batchSize);
+            }
+            
+        } catch (error) {
+            console.error("Batch search error:", error);
+            throw error;
+        }
+    }
 
     async function searchMultipleLocations() {
         const keyword = document.getElementById("keyword-multi").value.trim();
@@ -643,42 +694,62 @@
         searchMultiBtn.disabled = true;
         const loaderText = loaderContainer.querySelector(".loader-text");
 
-        // Update loader text with progress
-        const progressInterval = setInterval(() => {
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            loaderText.innerHTML = `🚀 Searching ${locations.length} locations in parallel... (${elapsed}s)`;
-        }, 500);
-
-        try {
-            const response = await fetch("/search-multiple", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    keyword, 
-                    locations: locationsInput 
-                })
-            });
-
-            clearInterval(progressInterval);
-            const result = await safeParseJSON(response);
-
-            // Hide loader
-            loaderContainer.classList.remove("active");
-            searchMultiBtn.disabled = false;
-
-            if (!response.ok) {
-                throw new Error(result.error || "Search failed");
+        // Use batch processing for > 5 locations to avoid timeouts
+        if (locations.length > 5) {
+            loaderText.innerHTML = `🚀 Starting batch search for ${locations.length} locations...`;
+            
+            try {
+                batchSessionId = null;
+                multiSearchResults = {};
+                
+                await searchBatch(keyword, locations, 0, 2);
+                
+                searchMultiBtn.disabled = false;
+            } catch (error) {
+                loaderContainer.classList.remove("active");
+                searchMultiBtn.disabled = false;
+                errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
+                errorAlert.classList.add("show");
+                console.error("Error:", error);
             }
+        } else {
+            // Use traditional search for <= 5 locations
+            const progressInterval = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                loaderText.innerHTML = `🚀 Searching ${locations.length} locations in parallel... (${elapsed}s)`;
+            }, 500);
 
-            multiSearchResults = result.results;
-            displayMultipleLocationResults(keyword, result.results);
+            try {
+                const response = await fetch("/search-multiple", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        keyword, 
+                        locations: locationsInput 
+                    })
+                });
 
-        } catch (error) {
-            clearInterval(progressInterval);
-            loaderContainer.classList.remove("active");
-            searchMultiBtn.disabled = false;
-            errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
-            errorAlert.classList.add("show");
+                clearInterval(progressInterval);
+                const result = await safeParseJSON(response);
+
+                // Hide loader
+                loaderContainer.classList.remove("active");
+                searchMultiBtn.disabled = false;
+
+                if (!response.ok) {
+                    throw new Error(result.error || "Search failed");
+                }
+
+                multiSearchResults = result.results;
+                displayMultipleLocationResults(keyword, result.results);
+
+            } catch (error) {
+                clearInterval(progressInterval);
+                loaderContainer.classList.remove("active");
+                searchMultiBtn.disabled = false;
+                errorAlert.innerHTML = `<i class='fas fa-exclamation-triangle'></i> ${error.message}`;
+                errorAlert.classList.add("show");
+            }
         }
     }
 

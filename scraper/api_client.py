@@ -1,22 +1,28 @@
 """
 Low-level Google Places API wrapper.
 Handles HTTP requests with error handling, retries, and rate limiting.
+Enhanced with connection pooling, adaptive backoff, and quota management.
 """
 
 import requests
 import time
+import logging
 from typing import Dict, Any, Optional, Tuple
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib3.poolmanager import PoolManager
 
 from .config import config
 from .rate_limiter import get_rate_limiter, get_api_tracker
+
+logger = logging.getLogger(__name__)
 
 
 class GooglePlacesAPIClient:
     """
     Wrapper for Google Places API endpoints.
     Provides methods for text search and place details with built-in error handling.
+    Includes connection pooling, adaptive rate limiting, and quota management.
     """
     
     # API endpoints
@@ -44,27 +50,71 @@ class GooglePlacesAPIClient:
         if not self.api_key:
             raise ValueError("Google Maps API key not configured")
         
-        # Create session with retry strategy
+        # Create session with optimized connection pooling
         self.session = self._create_session()
+        
+        # Track consecutive quota errors for adaptive backoff
+        self._quota_backoff_multiplier = 1.0
+        self._last_quota_error_time = 0
     
     @staticmethod
     def _create_session() -> requests.Session:
-        """Create requests session with retry strategy."""
+        """Create requests session with optimized retry strategy and connection pooling."""
         session = requests.Session()
         
         # Configure retry strategy for network errors
+        # Uses exponential backoff with multipliers
         retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"]
+            total=5,  # More retries for stability
+            connect=3,
+            read=2,
+            backoff_factor=0.5,  # Starts at 0.5s: 0.5, 1.0, 2.0, 4.0, 8.0
+            status_forcelist=[408, 429, 500, 502, 503, 504],  # Include 408 timeout
+            allowed_methods=["GET"],
+            raise_on_status=False  # Don't raise, let us handle status
         )
         
-        adapter = HTTPAdapter(max_retries=retry_strategy)
+        # Create adapter with connection pooling
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,  # Number of connection pools
+            pool_maxsize=10,       # Max connections per pool
+            pool_block=False       # Non-blocking when pool exhausted
+        )
+        
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         
+        # Set useful headers for keep-alive and compression
+        session.headers.update({
+            "Connection": "keep-alive",
+            "Accept-Encoding": "gzip, deflate",
+            "User-Agent": "GMD-Tool/2.0"
+        })
+        
         return session
+    
+    def _handle_quota_error(self):
+        """Handle quota error with adaptive backoff."""
+        current_time = time.time()
+        time_since_last_error = current_time - self._last_quota_error_time
+        
+        # Reset multiplier if enough time has passed
+        if time_since_last_error > 300:  # 5 minutes
+            self._quota_backoff_multiplier = 1.0
+        else:
+            # Exponential backoff: 2x each time
+            self._quota_backoff_multiplier = min(self._quota_backoff_multiplier * 2, 32)
+        
+        self._last_quota_error_time = current_time
+        
+        backoff_seconds = 2 * self._quota_backoff_multiplier
+        logger.warning(
+            f"Quota limit hit. Backing off for {backoff_seconds:.1f}s. "
+            f"Multiplier: {self._quota_backoff_multiplier:.1f}x"
+        )
+        
+        return backoff_seconds
     
     def text_search(
         self,
@@ -105,15 +155,41 @@ class GooglePlacesAPIClient:
             response = self.session.get(
                 self.TEXT_SEARCH_ENDPOINT,
                 params=params,
-                timeout=config.REQUEST_TIMEOUT
+                timeout=config.REQUEST_TIMEOUT,
+                allow_redirects=True
             )
-            response.raise_for_status()
             
-            # Record successful call
-            get_api_tracker().record_call()
+            # Check response status
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check for API-level quota error
+                if data.get("status") == self.STATUS_OVER_QUERY_LIMIT:
+                    backoff_seconds = self._handle_quota_error()
+                    time.sleep(backoff_seconds)
+                    # Return the response anyway (client can handle partial results)
+                
+                # Record successful call
+                if data.get("status") in (self.STATUS_OK, self.STATUS_ZERO_RESULTS):
+                    get_api_tracker().record_call()
+                
+                return data, response.status_code
             
-            data = response.json()
-            return data, response.status_code
+            elif response.status_code == 429:
+                # Rate limit from HTTP
+                backoff_seconds = self._handle_quota_error()
+                time.sleep(backoff_seconds)
+                return {"status": self.STATUS_OVER_QUERY_LIMIT, "results": []}, 429
+            
+            else:
+                # Try to parse as JSON anyway
+                try:
+                    data = response.json()
+                except:
+                    data = {"error": f"HTTP {response.status_code}"}
+                
+                logger.warning(f"Unexpected status code {response.status_code} for query: {query}")
+                return data, response.status_code
             
         except requests.exceptions.Timeout:
             raise TimeoutError(
@@ -121,14 +197,13 @@ class GooglePlacesAPIClient:
             )
         except requests.exceptions.ConnectionError as e:
             raise ConnectionError(f"Connection error: {str(e)}")
-        except requests.exceptions.HTTPError as e:
-            if response.status_code == 403:
-                raise ValueError(
-                    "Forbidden: Check your API key and ensure Places API is enabled"
-                )
-            raise Exception(f"HTTP {response.status_code}: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request exception: {str(e)}")
+            raise Exception(f"Request failed: {str(e)}")
         except Exception as e:
+            logger.error(f"Unexpected error in text_search: {str(e)}")
             raise Exception(f"Unexpected error in text_search: {str(e)}")
+
     
     def get_place_details(
         self,
@@ -161,17 +236,45 @@ class GooglePlacesAPIClient:
             response = self.session.get(
                 self.PLACE_DETAILS_ENDPOINT,
                 params=params,
-                timeout=config.REQUEST_TIMEOUT
+                timeout=config.REQUEST_TIMEOUT,
+                allow_redirects=True
             )
-            response.raise_for_status()
             
-            get_api_tracker().record_call()
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check for API-level quota error
+                if data.get("status") == self.STATUS_OVER_QUERY_LIMIT:
+                    backoff_seconds = self._handle_quota_error()
+                    time.sleep(backoff_seconds)
+                
+                # Record successful call
+                if data.get("status") == self.STATUS_OK:
+                    get_api_tracker().record_call()
+                
+                return data, response.status_code
             
-            data = response.json()
-            return data, response.status_code
+            elif response.status_code == 429:
+                backoff_seconds = self._handle_quota_error()
+                time.sleep(backoff_seconds)
+                return {"status": self.STATUS_OVER_QUERY_LIMIT}, 429
             
+            else:
+                try:
+                    data = response.json()
+                except:
+                    data = {"error": f"HTTP {response.status_code}"}
+                
+                return data, response.status_code
+                
+        except requests.exceptions.Timeout:
+            raise TimeoutError(f"Place details request timed out for place_id: {place_id}")
+        except requests.exceptions.ConnectionError as e:
+            raise ConnectionError(f"Connection error: {str(e)}")
         except Exception as e:
+            logger.error(f"Error fetching place details: {str(e)}")
             raise Exception(f"Error fetching place details: {str(e)}")
+
     
     @staticmethod
     def is_success_status(status: str) -> bool:

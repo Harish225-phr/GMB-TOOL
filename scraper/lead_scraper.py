@@ -1,12 +1,13 @@
 """
 Lead scraper orchestrator - main execution engine.
 Coordinates API client, rate limiting, caching, deduplication, and website extraction.
-Production-ready lead generation engine.
+Production-ready lead generation engine with memory optimization for free-tier.
 """
 
 import time
 import logging
-from typing import Dict, List, Optional, Tuple
+import gc
+from typing import Dict, List, Optional, Tuple, Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -80,6 +81,24 @@ class LeadScraperEngine:
             "cache_hits": 0,
         }
     
+    def _trigger_gc(self, threshold_mb: int = 100):
+        """Trigger garbage collection if memory usage is high."""
+        try:
+            import psutil
+            import os
+            process = psutil.Process(os.getpid())
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            
+            if memory_mb > threshold_mb:
+                logger.info(f"Memory usage high ({memory_mb:.1f}MB), triggering GC")
+                gc.collect()
+        except ImportError:
+            # psutil not installed, just do periodic GC
+            gc.collect()
+        except Exception as e:
+            logger.debug(f"GC check failed: {e}")
+    
+
     def search_single_location(
         self,
         keyword: str,
@@ -216,6 +235,9 @@ class LeadScraperEngine:
             }
             self.cache.cache_search_results(keyword, location, cache_data)
         
+        # Trigger GC if needed
+        self._trigger_gc(threshold_mb=80)
+        
         elapsed = time.time() - start_time
         logger.info(
             f"Search completed: '{keyword}' in '{location}' - "
@@ -305,6 +327,9 @@ class LeadScraperEngine:
             dedup_count=dedup_stats["duplicates_removed"],
             expanded_locations=locations_to_search,
         )
+        
+        # Trigger GC after large operation
+        self._trigger_gc(threshold_mb=100)
         
         elapsed = time.time() - start_time
         logger.info(

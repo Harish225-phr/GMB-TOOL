@@ -1,11 +1,13 @@
 """
 Flask application using refactored lead scraper engine.
 Production-grade API for lead generation with geo-grid expansion, caching, and deduplication.
+Enhanced with batch processing for free-tier stability.
 """
 
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from scraper.lead_scraper import LeadScraperEngine
+from scraper.batch_processor import get_batch_processor
 from scraper.config import config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
@@ -13,6 +15,7 @@ import json
 import sys
 import os
 import time
+import uuid
 
 # Setup logging
 logging.basicConfig(
@@ -27,6 +30,8 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/search": {"origins": "*"},
     r"/search-multiple": {"origins": "*"},
+    r"/search-batch": {"origins": "*"},
+    r"/batch-status": {"origins": "*"},
     r"/health": {"origins": "*"},
     r"/metrics": {"origins": "*"},
     r"/config": {"origins": "*"},
@@ -210,6 +215,207 @@ def search():
         log_error(f"Search error: {str(e)}")
         return jsonify({
             "error": "Search failed. Please try again.",
+            "details": str(e) if config.DEBUG_MODE else None
+        }), 500
+
+
+@app.route("/search-batch", methods=["POST"])
+def search_batch():
+    """
+    Search for leads using batch processing (free-tier optimized).
+    Processes one batch at a time to avoid timeouts.
+    
+    Request JSON:
+    {
+        "session_id": "optional-id",  # Optional, generated if not provided
+        "keyword": "restaurants",
+        "locations": ["Delhi", "Mumbai", "Bangalore"],  # Array of locations
+        "batch_size": 2,  # How many locations per batch
+        "use_expansion": false,
+        "fetch_websites": true,
+        "batch_index": 0  # Which batch to process (0 = first)
+    }
+    
+    Response:
+    {
+        "session_id": "...",
+        "batch_results": {...},  # Results for this batch
+        "progress": {
+            "current_batch": 1,
+            "total_batches": 3,
+            "locations_completed": 2,
+            "total_locations": 6,
+            "percent_complete": 33.3,
+            "has_next_batch": true
+        },
+        "next_batch_index": 1
+    }
+    """
+    try:
+        # Check if scraper is initialized
+        if scraper_engine is None:
+            return jsonify({
+                "error": "Search service not available",
+                "details": "Google API Key not configured. Set GOOGLE_MAPS_API_KEY environment variable."
+            }), 503
+        
+        if not config.GOOGLE_API_KEY:
+            return jsonify({
+                "error": "API Key not configured",
+                "details": "Set GOOGLE_MAPS_API_KEY environment variable to use search functionality"
+            }), 503
+        
+        if not request.json:
+            return jsonify({"error": "Invalid JSON request"}), 400
+        
+        # Parse request
+        session_id = request.json.get("session_id") or str(uuid.uuid4())
+        keyword = request.json.get("keyword", "").strip()
+        locations_input = request.json.get("locations", [])
+        batch_size = request.json.get("batch_size", 2)
+        batch_index = request.json.get("batch_index", 0)
+        use_expansion = request.json.get("use_expansion", False)
+        fetch_websites = request.json.get("fetch_websites", True)
+        
+        if not keyword:
+            return jsonify({"error": "Keyword is required"}), 400
+        
+        if not locations_input:
+            return jsonify({"error": "Locations array is required"}), 400
+        
+        # Ensure locations is a list
+        if isinstance(locations_input, str):
+            locations = [loc.strip() for loc in locations_input.split(",") if loc.strip()]
+        else:
+            locations = [str(loc).strip() for loc in locations_input if loc.strip()]
+        
+        if not locations:
+            return jsonify({"error": "At least one location is required"}), 400
+        
+        # Get or create batch session
+        batch_processor = get_batch_processor()
+        session = batch_processor.get_session(session_id)
+        
+        if not session:
+            # Create new session
+            session = batch_processor.create_session(
+                session_id=session_id,
+                keyword=keyword,
+                locations=locations,
+                use_expansion=use_expansion,
+                fetch_websites=fetch_websites,
+                batch_size=batch_size
+            )
+            logger.info(f"Created batch session: {session_id} with {len(locations)} locations")
+        
+        # Validate batch index
+        if batch_index >= session.total_batches:
+            return jsonify({
+                "error": f"Invalid batch index {batch_index}. Total batches: {session.total_batches}"
+            }), 400
+        
+        # Set current batch to requested index
+        session.current_batch_index = batch_index
+        
+        # Get locations for this batch
+        batch_locations = session.get_current_batch()
+        logger.info(
+            f"Processing batch {batch_index + 1}/{session.total_batches} "
+            f"({len(batch_locations)} locations)"
+        )
+        
+        # Execute searches for this batch
+        def search_location(location):
+            try:
+                if use_expansion:
+                    result = scraper_engine.search_with_expansion(
+                        keyword, location, fetch_websites
+                    )
+                else:
+                    result = scraper_engine.search_single_location(
+                        keyword, location, fetch_websites
+                    )
+                
+                batch_processor.mark_location_completed(session_id, location)
+                return (location, result.to_dict())
+            except Exception as e:
+                logger.error(f"Error searching {location}: {str(e)}")
+                batch_processor.mark_location_failed(session_id, location)
+                return (location, {"error": str(e), "results": []})
+        
+        # Execute batch searches with timeout
+        batch_results = {}
+        start_time = time.time()
+        timeout_seconds = 40  # 40 seconds per batch (safe on free tier)
+        
+        try:
+            with ThreadPoolExecutor(max_workers=min(batch_size, 3)) as executor:
+                futures = {
+                    executor.submit(search_location, loc): loc for loc in batch_locations
+                }
+                
+                for future in as_completed(futures, timeout=timeout_seconds):
+                    try:
+                        location, result_data = future.result()
+                        batch_results[location] = result_data
+                    except Exception as e:
+                        location = futures[future]
+                        logger.error(f"Batch search error: {str(e)}")
+                        batch_results[location] = {"error": str(e), "results": []}
+        
+        except Exception as e:
+            logger.warning(f"Batch timeout or error: {str(e)}")
+            # Return partial results if available
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Batch {batch_index + 1} completed in {elapsed:.1f}s with {len(batch_results)} results")
+        
+        # Build response
+        response_data = {
+            "session_id": session_id,
+            "batch_index": batch_index,
+            "batch_results": batch_results,
+            "batch_results_count": len(batch_results),
+            "progress": session.get_progress(),
+            "next_batch_index": batch_index + 1 if session.has_next_batch() else None,
+            "has_next_batch": session.has_next_batch(),
+        }
+        
+        return jsonify(response_data), 200
+    
+    except Exception as e:
+        log_error(f"Batch search error: {str(e)}")
+        return jsonify({
+            "error": "Batch search failed. Please try again.",
+            "details": str(e) if config.DEBUG_MODE else None
+        }), 500
+
+
+@app.route("/batch-status/<session_id>", methods=["GET"])
+def batch_status(session_id: str):
+    """
+    Get status of a batch processing session.
+    """
+    try:
+        batch_processor = get_batch_processor()
+        session = batch_processor.get_session(session_id)
+        
+        if not session:
+            return jsonify({
+                "error": "Session not found",
+                "session_id": session_id
+            }), 404
+        
+        return jsonify({
+            "session_id": session_id,
+            "progress": session.get_progress(),
+            "metadata": session.to_dict(),
+        }), 200
+    
+    except Exception as e:
+        log_error(f"Error getting batch status: {str(e)}")
+        return jsonify({
+            "error": "Failed to get batch status",
             "details": str(e) if config.DEBUG_MODE else None
         }), 500
 
