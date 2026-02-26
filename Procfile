@@ -1,1 +1,1 @@
-web: gunicorn --timeout 300 --workers 1 --worker-class sync --max-requests 500 --keepalive 75 app:app
+web: gunicorn --timeout 120 --workers 3 --worker-class gevent --worker-connections 200 --max-requests 1000 --keepalive 75 app:app

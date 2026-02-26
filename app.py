@@ -12,6 +12,7 @@ import logging
 import json
 import sys
 import os
+import time
 
 # Setup logging
 logging.basicConfig(
@@ -264,9 +265,7 @@ def search_multiple():
             f"Multi-location search: '{keyword}' in {len(location_list)} locations"
         )
         
-        # Search each location in parallel
-        all_results = {}
-        
+        # Define search function for parallel execution
         def search_location(location):
             try:
                 if use_expansion:
@@ -282,22 +281,33 @@ def search_multiple():
                 logger.error(f"Error searching {location}: {str(e)}")
                 return (location, {"error": str(e), "results": []})
         
-        # Execute parallel searches
+        # Execute parallel searches with early timeout
+        start_time = time.time()
+        all_results = {}
+        
         with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as executor:
             futures = [
                 executor.submit(search_location, loc) for loc in location_list
             ]
             
             try:
-                for future in as_completed(futures, timeout=300):
+                for future in as_completed(futures, timeout=90):  # 90 second limit to avoid worker timeout
                     try:
                         location, result_data = future.result()
                         all_results[location] = result_data
                     except Exception as e:
                         log_error(f"Future error: {str(e)}")
                         continue
+                    
+                    # Safety check: if we're taking too long, warn and return early
+                    elapsed = time.time() - start_time
+                    if elapsed > 100:
+                        logger.warning(f"Search is taking too long ({elapsed:.1f}s), returning partial results")
+                        break
             except Exception as e:
                 log_error(f"Parallel search timeout: {str(e)}")
+                logger.warning(f"Returning partial results. Completed: {len(all_results)}/{len(location_list)}")
+        
         
         response_data = {
             "keyword": keyword,

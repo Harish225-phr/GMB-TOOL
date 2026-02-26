@@ -20,9 +20,9 @@ class AppConfig:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
     
     # Threading and Concurrency
-    MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", "3"))  # Thread pool size
-    MAX_CONCURRENT_API_CALLS: int = int(os.getenv("MAX_CONCURRENT_API_CALLS", "5"))
-    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "15"))  # seconds
+    MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", "5"))  # Thread pool size (increased for faster parallelism)
+    MAX_CONCURRENT_API_CALLS: int = int(os.getenv("MAX_CONCURRENT_API_CALLS", "8"))  # Increased for better throughput
+    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "20"))  # seconds
     
     # Rate Limiting (requests per second per location)
     MIN_DELAY_BETWEEN_REQUESTS: float = float(os.getenv("MIN_DELAY_BETWEEN_API_CALLS", "0.2"))  # 200ms
@@ -40,8 +40,8 @@ class AppConfig:
     CACHE_SEARCH_TTL: int = 3600  # 1 hour for search results
     
     # Website Fetching
-    FETCH_WEBSITES_BY_DEFAULT: bool = True
-    WEBSITE_FETCH_TIMEOUT: int = 30  # seconds
+    FETCH_WEBSITES_BY_DEFAULT: bool = False  # Disabled by default to avoid timeouts - enable if needed
+    WEBSITE_FETCH_TIMEOUT: int = 10  # seconds (reduced from 30)
     
     # Logging
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "False").lower() == "true"
